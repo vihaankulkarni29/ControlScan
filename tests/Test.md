@@ -106,6 +106,3 @@ Jaccard Co-occurrence Score for acrA_T104A & acrB_N596H: 0.80
 
 ### Result
 The stable Python 3.11 rerun completed successfully and produced the expected co-occurrence matrix and epistasis score.
-
-## File Location Update
-- The dry-run script and this log were moved to the tests folder to keep test artifacts together.
