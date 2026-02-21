@@ -67,7 +67,7 @@ class MutationMatrix:
         # Collect all unique mutations
         all_mutations = set()
         for sample in self.samples:
-            mutations = sample.get('Mutations', [])
+            mutations = self._extract_mutations(sample)
             if isinstance(mutations, str):
                 mutations = [mutations]  # Handle single mutation
             all_mutations.update(mutations)
@@ -83,7 +83,7 @@ class MutationMatrix:
         
         # Count co-occurrences
         for sample in self.samples:
-            mutations = sample.get('Mutations', [])
+            mutations = self._extract_mutations(sample)
             if isinstance(mutations, str):
                 mutations = [mutations]
             
@@ -103,6 +103,17 @@ class MutationMatrix:
         
         logger.info(f"Co-occurrence matrix built: {self.co_occurrence_matrix.shape}")
         return self.co_occurrence_matrix
+
+    @staticmethod
+    def _extract_mutations(sample: Dict[str, List[str]]) -> List[str]:
+        """
+        Extract mutations from a sample dict while tolerating key casing.
+
+        Accepts both 'Mutations' and 'mutations' to support varied input formats.
+        """
+        if 'Mutations' in sample:
+            return sample.get('Mutations', [])
+        return sample.get('mutations', [])
     
     def calculate_exclusivity(self, mutation_a: str, mutation_b: str) -> float:
         """
