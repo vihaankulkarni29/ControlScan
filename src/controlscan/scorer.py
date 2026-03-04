@@ -12,6 +12,7 @@ The scoring engine produces:
 
 import math
 import logging
+import re
 from typing import List, Tuple, Dict, Any
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,9 @@ class MutationScorer:
             'Y': {'A': -2, 'R': -2, 'N': -2, 'D': -3, 'C': -2, 'Q': -1, 'E': -2, 'G': -3, 'H':  2, 'I': -1, 'L': -1, 'K': -2, 'M': -1, 'F':  3, 'P': -3, 'S': -2, 'T': -2, 'W':  2, 'Y':  7, 'V': -1},
             'V': {'A':  0, 'R': -3, 'N': -3, 'D': -3, 'C': -1, 'Q': -2, 'E': -2, 'G': -3, 'H': -3, 'I':  3, 'L':  1, 'K': -2, 'M':  1, 'F': -1, 'P': -2, 'S': -2, 'T':  0, 'W': -3, 'Y': -1, 'V':  4},
         }
+        
+        # Valid amino acids (including stop codon)
+        self.VALID_AA = set("ARNDCQEGHILKMFPSTWYV*")
         
         # Grantham Distance Properties: Composition (c), Polarity (p), Volume (v)
         self.AA_PROPERTIES = {
@@ -143,65 +147,100 @@ class MutationScorer:
     
     def parse_mutation(self, mut_string: str) -> Tuple[str, str, str]:
         """
-        Parse mutation string into components.
+        Strictly extracts and validates Wild-Type, Position, and Mutant amino acids.
+        
+        Uses regex to enforce strict format: One letter, one or more digits, one letter/asterisk.
+        Validates amino acids against VALID_AA set.
         
         Args:
-            mut_string (str): Mutation string like "I174V"
+            mut_string (str): Mutation string like "I174V" or "Q45*"
         
         Returns:
             tuple: (wild_type_aa, position, mutant_aa)
             
         Raises:
-            ValueError: If mutation string is malformed
+            TypeError: If input is not a string
+            ValueError: If format or amino acids are invalid
         """
-        if not mut_string or len(mut_string) < 3:
-            raise ValueError(f"Invalid mutation string: {mut_string}")
+        if not isinstance(mut_string, str):
+            raise TypeError(f"Mutation must be a string, got {type(mut_string).__name__}")
         
-        wild_type = mut_string[0].upper()
-        mutant = mut_string[-1].upper()
-        position = mut_string[1:-1]
+        mut_string = mut_string.strip().upper()
         
-        if not position.isdigit():
-            raise ValueError(f"Invalid position in mutation: {mut_string}")
+        # Strict regex: One letter, one or more digits, one letter or asterisk (*)
+        match = re.match(r'^([A-Z])(\d+)([A-Z\*])$', mut_string)
+        if not match:
+            raise ValueError(f"Invalid mutation format: '{mut_string}'. Expected format: 'I174V'")
         
-        return (wild_type, position, mutant)
+        wt, pos, mut = match.groups()
+        
+        # Validate amino acids
+        if wt not in self.AA_PROPERTIES and wt != '*':
+            raise ValueError(f"Unknown Wild-Type amino acid: {wt}")
+        if mut not in self.AA_PROPERTIES and mut != '*':
+            raise ValueError(f"Unknown Mutant amino acid: {mut}")
+        
+        return wt, pos, mut
     
     def score_single(self, mut_string: str) -> Dict[str, Any]:
         """
-        Score a single amino acid mutation.
+        Mathematically bounded and type-safe scoring of a single mutation.
         
-        Combines evolutionary (BLOSUM62) and chemical (Grantham) penalties
-        into a unified severity score (0-100 scale).
+        Handles edge cases (synonymous mutations, stop codons) and gracefully
+        catches all input validation errors without raising exceptions.
         
         Args:
-            mut_string (str): Mutation string like "I174V"
+            mut_string: Mutation string like "I174V", "I174I" (synonymous), or "Q45*" (stop)
         
         Returns:
-            dict: Contains mutation, BLOSUM score, Grantham score, Severity, and Category
+            dict: Contains Mutation, BLOSUM, Grantham, Severity, Category (and Error if caught)
         """
+        # Attempt parsing; return error dict if validation fails
         try:
-            wild_type, position, mutant = self.parse_mutation(mut_string)
-        except ValueError as e:
-            logger.error(f"Failed to parse mutation: {e}")
-            raise
+            wt, pos, mut = self.parse_mutation(mut_string)
+        except (ValueError, TypeError) as e:
+            return {
+                'Mutation': str(mut_string),
+                'Error': str(e),
+                'Severity': None,
+                'Category': 'ERROR'
+            }
         
-        # Get raw scores
-        blosum_raw = self._get_blosum(wild_type, mutant)
-        grantham_raw = self._calc_grantham(wild_type, mutant)
+        # Edge Case 1: Synonymous Mutation (Wild-type == Mutant, no change)
+        if wt == mut:
+            return {
+                'Mutation': mut_string,
+                'BLOSUM': self._get_blosum(wt, mut),
+                'Grantham': 0.0,
+                'Severity': 0.0,
+                'Category': 'BENIGN'
+            }
         
-        # Normalize BLOSUM: [-4, 11] -> [0, 1]
-        # Range is 15 (from -4 to 11)
-        blosum_norm = (blosum_raw + 4) / 15.0
+        # Edge Case 2: Nonsense Mutation (Stop Codon = Maximum Severity)
+        if mut == '*':
+            return {
+                'Mutation': mut_string,
+                'BLOSUM': -4,
+                'Grantham': 215.0,
+                'Severity': 100.0,
+                'Category': 'PATHOGENIC'
+            }
         
-        # Normalize Grantham: [0, 215] -> [0, 1]
-        grantham_norm = min(grantham_raw / 215.0, 1.0)
+        # Standard Scoring Path
+        blosum = self._get_blosum(wt, mut)
+        grantham = self._calc_grantham(wt, mut)
         
-        # Calculate severity: 40% evolutionary penalty + 60% chemical penalty
-        # (1 - blosum_norm) inverts so high BLOSUM becomes low penalty
+        # Normalize BLOSUM: [-4, 11] -> [0, 1] with strict bounds
+        blosum_norm = max(0.0, min((blosum + 4) / 15.0, 1.0))
+        
+        # Normalize Grantham: [0, 215] -> [0, 1] with strict bounds
+        grantham_norm = min(grantham / 215.0, 1.0)
+        
+        # Calculate severity: 40% evolutionary + 60% chemical penalty
         severity_raw = (0.40 * (1 - blosum_norm) + 0.60 * grantham_norm)
-        severity_final = min(severity_raw * 100, 100)
+        severity_final = max(0.0, min(severity_raw * 100, 100.0))  # Strict bounds: [0, 100]
         
-        # Assign category
+        # Assign category based on bounded severity
         if severity_final < 30:
             category = "BENIGN"
         elif severity_final < 60:
@@ -211,8 +250,8 @@ class MutationScorer:
         
         return {
             'Mutation': mut_string,
-            'BLOSUM62': round(blosum_raw, 2),
-            'Grantham': round(grantham_raw, 2),
+            'BLOSUM': blosum,
+            'Grantham': grantham,
             'Severity': round(severity_final, 2),
             'Category': category
         }
@@ -220,6 +259,8 @@ class MutationScorer:
     def score_network(self, network_mutations: List[str]) -> Dict[str, Any]:
         """
         Score a network of co-occurring mutations (epistatic interactions).
+        
+        Filters out error results before calculating network-level statistics.
         
         Args:
             network_mutations (list): List of mutation strings like ["I174V", "K10R"]
@@ -231,13 +272,20 @@ class MutationScorer:
             raise ValueError("Network must contain at least one mutation")
         
         individual_scores = [self.score_single(mut) for mut in network_mutations]
-        severities = [score['Severity'] for score in individual_scores]
+        
+        # Filter out error results (where Severity is None)
+        valid_scores = [score for score in individual_scores if score.get('Severity') is not None]
+        
+        if not valid_scores:
+            raise ValueError("No valid mutations in network (all had errors)")
+        
+        severities = [score['Severity'] for score in valid_scores]
         
         network_name = "_".join(network_mutations)
         
         return {
             'Network': network_name,
-            'Individual_Scores': individual_scores,
+            'Individual_Scores': valid_scores,
             'Mean_Severity': round(sum(severities) / len(severities), 2),
             'Max_Severity': round(max(severities), 2)
         }

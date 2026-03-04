@@ -26,12 +26,15 @@ def print_header():
 
 def print_single_result(result: dict):
     """Pretty-print a single mutation score."""
-    print(f"  Mutation:        {result['Mutation']}")
-    print(f"  BLOSUM62 Score:  {result['BLOSUM62']}")
-    print(f"  Grantham Dist:   {result['Grantham']}")
-    print(f"  Severity:        {result['Severity']}/100")
-    print(f"  Category:        {result['Category']}")
-    print()
+    if result.get('Error'):
+        print(f"  Error: {result['Error']}\n")
+    else:
+        print(f"  Mutation:        {result['Mutation']}")
+        print(f"  BLOSUM62 Score:  {result.get('BLOSUM', 'N/A')}")
+        print(f"  Grantham Dist:   {result.get('Grantham', 'N/A')}")
+        print(f"  Severity:        {result['Severity']}/100")
+        print(f"  Category:        {result['Category']}")
+        print()
 
 
 def print_network_result(result: dict):
@@ -44,8 +47,8 @@ def print_network_result(result: dict):
     print("  Individual Mutations:")
     print("  " + "-" * 76)
     for score in result['Individual_Scores']:
-        print(f"    {score['Mutation']:8s} | BLOSUM: {score['BLOSUM62']:6.2f} | "
-              f"Grantham: {score['Grantham']:6.2f} | "
+        print(f"    {score['Mutation']:8s} | BLOSUM: {score.get('BLOSUM', 'N/A'):6} | "
+              f"Grantham: {score.get('Grantham', 'N/A'):6} | "
               f"Severity: {score['Severity']:6.2f} | {score['Category']:10s}")
     print()
 
